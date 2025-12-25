@@ -1,15 +1,51 @@
-import sys
+import os
 
 import matplotlib
 
 matplotlib.use("TkAgg")
 
+from datetime import datetime
+
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pygame
 
+agora = datetime.now()
+timestamp = agora.strftime("%Y%m%d_%H%M")
 
-# --- 1. O MOTOR DE FÍSICA (Compartilhado) ---
+VIDEO_FILE_NAME = f"simulacao-{timestamp}.mp4"
+CAPTURAS_PATH = "capturas"
+
+
+def criar_video(pasta_origem, nome_video_saida, fps=30):
+    image_folder = pasta_origem
+    video_name = nome_video_saida
+
+    images = [img for img in os.listdir(image_folder) if img.endswith(".png")]
+    images.sort()
+
+    if not images:
+        print(f"Nenhuma imagem encontrada em {image_folder}")
+        return
+
+    frame = cv2.imread(os.path.join(image_folder, images[0]))
+    height, width, layers = frame.shape
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    video = cv2.VideoWriter(video_name, fourcc, fps, (width, height))
+
+    print(f"Gerando vídeo '{video_name}' com {len(images)} frames...")
+
+    for image in images:
+        video.write(cv2.imread(os.path.join(image_folder, image)))
+
+    cv2.destroyAllWindows()
+    video.release()
+    print("Vídeo concluído com sucesso!")
+
+
+# MOTOR DE FÍSICA (Compartilhado)
 class KolmogorovField:
     def __init__(self, N=512, slope=2.0):
         self.N = N
@@ -57,7 +93,7 @@ class KolmogorovField:
         return radial_profile
 
 
-# --- 2. A PROVA CIENTÍFICA (Matplotlib) ---
+# A PROVA CIENTÍFICA
 def mostrar_grafico_estatico(motor):
     print("Gerando gráfico de análise e salvando como 'espectro_kolmogorov.png'...")
     u, v, psi = motor.get_velocity_field()
@@ -87,7 +123,7 @@ def mostrar_grafico_estatico(motor):
     plt.close()  # Fecha a figura para liberar memória
 
 
-# --- 3. A SIMULAÇÃO VISUAL (Pygame) ---
+# A SIMULAÇÃO VISUAL
 def rodar_simulacao_pygame(motor):
     # Configurações
     WIDTH, HEIGHT = 800, 800
@@ -114,66 +150,110 @@ def rodar_simulacao_pygame(motor):
     # Criar partículas (Posições aleatórias)
     particles = np.random.rand(NUM_PARTICLES, 2) * [WIDTH, HEIGHT]
 
+    # CONFIGURAÇÃO
+
+    pausado = False
+    gravado = False
+    contador_frames = 0
+    nome_pasta = "capturas"
     running = True
+
+    if not os.path.exists(nome_pasta):
+        os.makedirs(nome_pasta)
+    pygame.font.init()
+    fonte_ui = pygame.font.SysFont("Arial", 24)
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = not running
+                elif event.key == pygame.K_SPACE:
+                    pausado = not pausado
+                elif event.key == pygame.K_s:
+                    gravado = not gravado
+                    if gravado:
+                        print("Gravação iniciada...")
+                    else:
+                        print("Gravação finalizada.\n")
+                        print("Criando arquivo de vídeo da simulação...")
+                        criar_video(CAPTURAS_PATH, VIDEO_FILE_NAME, fps=60)
 
-        # --- Lógica de Física (Lagrangiana) ---
-        # 1. Encontrar em qual célula da grade cada partícula está
-        # (Mapear posição da tela 800x800 para grade 512x512)
-        grid_x = (particles[:, 0] / WIDTH * motor.N).astype(int) % motor.N
-        grid_y = (particles[:, 1] / HEIGHT * motor.N).astype(int) % motor.N
+        if not pausado:
+            #  Lógica de Física (Lagrangiana)
+            # 1. Encontrar em qual célula da grade cada partícula está
+            # (Mapear posição da tela 800x800 para grade 512x512)
+            grid_x = (particles[:, 0] / WIDTH * motor.N).astype(int) % motor.N
+            grid_y = (particles[:, 1] / HEIGHT * motor.N).astype(int) % motor.N
 
-        # 2. Obter velocidade naquela célula (Vectorized Lookup)
-        # Isso é super rápido com Numpy
-        p_u = u_grid[grid_y, grid_x]
-        p_v = v_grid[grid_y, grid_x]
+            # 2. Obter velocidade naquela célula (Vectorized Lookup)
+            # Isso é super rápido com Numpy
+            p_u = u_grid[grid_y, grid_x]
+            p_v = v_grid[grid_y, grid_x]
 
-        # 3. Mover partículas
-        particles[:, 0] += p_u * 0.1  # dt
-        particles[:, 1] += p_v * 0.1
+            # 3. Mover partículas
+            particles[:, 0] += p_u * 0.1  # dt
+            particles[:, 1] += p_v * 0.1
 
-        # 4. Wrap-around (Toroidal) - Se sair da tela, volta do outro lado
-        particles[:, 0] = particles[:, 0] % WIDTH
-        particles[:, 1] = particles[:, 1] % HEIGHT
+            # 4. Wrap-around (Toroidal) - Se sair da tela, volta do outro lado
+            particles[:, 0] = particles[:, 0] % WIDTH
+            particles[:, 1] = particles[:, 1] % HEIGHT
 
-        # --- Renderização ---
-        # Técnica de "Trail": Em vez de limpar a tela, desenhamos um retângulo
-        # preto semi-transparente. Isso deixa o rastro das partículas.
-        fade_surface = pygame.Surface((WIDTH, HEIGHT))
-        fade_surface.set_alpha(20)  # Transparência (0-255). Menor = rastros mais longos
-        fade_surface.fill(BACKGROUND_COLOR)
-        screen.blit(fade_surface, (0, 0))
+            # --- Renderização ---
+            # Técnica de "Trail": Em vez de limpar a tela, desenhamos um retângulo
+            # preto semi-transparente. Isso deixa o rastro das partículas.
+            fade_surface = pygame.Surface((WIDTH, HEIGHT))
+            fade_surface.set_alpha(
+                20
+            )  # Transparência (0-255). Menor = rastros mais longos
+            fade_surface.fill(BACKGROUND_COLOR)
+            screen.blit(fade_surface, (0, 0))
 
-        # Desenhar partículas
-        # Colorimos baseados na velocidade
-        speeds = np.sqrt(p_u**2 + p_v**2)
-        max_speed = np.percentile(speeds, 95)  # Normalizar ignorando outliers
+            # Desenhar partículas
+            # Colorimos baseados na velocidade
+            speeds = np.sqrt(p_u**2 + p_v**2)
+            max_speed = np.percentile(speeds, 95)  # Normalizar ignorando outliers
 
-        # Acesso direto aos pixels (muito mais rápido que desenhar circulos)
-        pixel_array = pygame.surfarray.pixels3d(screen)
+            # Acesso direto aos pixels (muito mais rápido que desenhar circulos)
+            pixel_array = pygame.surfarray.pixels3d(screen)
 
-        # Mapeamento simples de cor (Apenas para demonstração visual rápida)
-        # Partículas rápidas = Amarelo, Lentas = Azul
-        for i in range(NUM_PARTICLES):
-            x, y = int(particles[i, 0]), int(particles[i, 1])
-            speed_ratio = min(speeds[i] / max_speed, 1.0)
+            # Mapeamento simples de cor (Apenas para demonstração visual rápida)
+            # Partículas rápidas = Amarelo, Lentas = Azul
+            for i in range(NUM_PARTICLES):
+                x, y = int(particles[i, 0]), int(particles[i, 1])
+                speed_ratio = min(speeds[i] / max_speed, 1.0)
 
-            # Escolher cor baseada na velocidade
-            if speed_ratio > 0.6:
-                c = COLORS[2]  # Amarelo
-            elif speed_ratio > 0.3:
-                c = COLORS[1]  # Ciano
-            else:
-                c = COLORS[0]  # Azul
+                # Escolher cor baseada na velocidade
+                if speed_ratio > 0.6:
+                    c = COLORS[2]  # Amarelo
+                elif speed_ratio > 0.3:
+                    c = COLORS[1]  # Ciano
+                else:
+                    c = COLORS[0]  # Azul
 
-            # Desenhar (verificando limites por segurança)
-            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                pixel_array[x, y] = c
+                # Desenhar (verificando limites por segurança)
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    pixel_array[x, y] = c
+            del pixel_array  # Liberar trava da superfície
 
-        del pixel_array  # Liberar trava da superfície
+            pass
+
+        if pausado:
+            texto_pausa = fonte_ui.render(
+                "PAUSADO", True, (255, 0, 0)
+            )  # Texto Vermelho
+            screen.blit(texto_pausa, (10, 10))
+
+        if gravado:
+            # Indicador visual de gravação (círculo vermelho no canto)
+            pygame.draw.circle(screen, (255, 0, 0), (WIDTH - 20, 20), 10)
+
+            # Lógica de Salvar o Frame
+            nome_arquivo = f"{nome_pasta}/img_{contador_frames:05d}.png"
+            pygame.image.save(screen, nome_arquivo)
+            contador_frames += 1
 
         pygame.display.flip()
         clock.tick(60)
@@ -181,7 +261,6 @@ def rodar_simulacao_pygame(motor):
     pygame.quit()
 
 
-# --- EXECUÇÃO ---
 if __name__ == "__main__":
     # 1. Configurar Física
     motor_fisico = KolmogorovField(N=512, slope=2.0)
